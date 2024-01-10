@@ -17,13 +17,23 @@ class IverksettingsresultatService(private val iverksettingsresultatRepository: 
         iverksettingsresultatRepository.insert(Iverksettingsresultat(behandlingId))
     }
 
-    fun oppdaterTilkjentYtelseForUtbetaling(behandlingId: UUID, tilkjentYtelseForUtbetaling: TilkjentYtelse) {
+    fun oppdaterTilkjentYtelseForUtbetaling(
+        behandlingId: UUID,
+        tilkjentYtelseForUtbetaling: TilkjentYtelse,
+        oppsplittetOppdrag: Boolean = false // todo fjern default
+    ) {
         val iverksettResultat = iverksettingsresultatRepository.findByIdOrThrow(behandlingId)
-        iverksettingsresultatRepository.update(iverksettResultat.copy(tilkjentYtelseForUtbetaling = tilkjentYtelseForUtbetaling))
+        iverksettingsresultatRepository.update(
+            iverksettResultat.copy(
+                tilkjentYtelseForUtbetaling = tilkjentYtelseForUtbetaling,
+                oppsplittetOppdrag = oppsplittetOppdrag,
+                sisteUtbetalingsdato = tilkjentYtelseForUtbetaling.andelerTilkjentYtelse.maxOfOrNull { it.periode.tom }
+            )
+        )
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun oppdaterOppdragResultat(behandlingId: UUID, oppdragResultat: OppdragResultat) {
+    // @Transactional(propagation = Propagation.REQUIRES_NEW) Denne trenger ikke å være i en ny transaksjon ??
+    fun oppdaterOppdragResultat(behandlingId: UUID, oppdragResultat: OppdragResultat?) {
         val iverksettResultat = iverksettingsresultatRepository.findByIdOrThrow(behandlingId)
         iverksettingsresultatRepository.update(iverksettResultat.copy(oppdragResultat = oppdragResultat))
     }
@@ -42,6 +52,7 @@ class IverksettingsresultatService(private val iverksettingsresultatRepository: 
         return tilkjenteYtelser
     }
 
+    // Ettersom man alltid oppretter et resultat burde ikke denne trenge å være nullable
     fun hentIverksettResultat(behandlingId: UUID): Iverksettingsresultat? {
         return iverksettingsresultatRepository.findByIdOrNull(behandlingId)
     }

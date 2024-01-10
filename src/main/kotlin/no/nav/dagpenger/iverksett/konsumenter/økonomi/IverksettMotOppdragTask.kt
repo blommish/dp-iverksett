@@ -1,22 +1,14 @@
 package no.nav.dagpenger.iverksett.konsumenter.økonomi
 
-import java.util.UUID
 import no.nav.dagpenger.iverksett.api.IverksettingService
-import no.nav.dagpenger.iverksett.api.domene.AndelTilkjentYtelse
-import no.nav.dagpenger.iverksett.api.domene.Iverksetting
-import no.nav.dagpenger.iverksett.api.domene.Iverksettingsresultat
-import no.nav.dagpenger.iverksett.api.domene.TilkjentYtelse
-import no.nav.dagpenger.iverksett.api.domene.behandlingId
-import no.nav.dagpenger.iverksett.api.domene.lagAndelData
-import no.nav.dagpenger.iverksett.api.domene.personident
-import no.nav.dagpenger.iverksett.api.domene.sakId
-import no.nav.dagpenger.iverksett.api.domene.tilAndelData
+import no.nav.dagpenger.iverksett.api.domene.*
 import no.nav.dagpenger.iverksett.api.tilstand.IverksettingsresultatService
 import no.nav.dagpenger.iverksett.konsumenter.opprettNesteTask
 import no.nav.dagpenger.iverksett.konsumenter.økonomi.utbetalingsoppdrag.Utbetalingsgenerator
 import no.nav.dagpenger.iverksett.konsumenter.økonomi.utbetalingsoppdrag.domene.Behandlingsinformasjon
 import no.nav.dagpenger.iverksett.konsumenter.økonomi.utbetalingsoppdrag.domene.BeregnetUtbetalingsoppdrag
 import no.nav.dagpenger.iverksett.konsumenter.økonomi.utbetalingsoppdrag.domene.StønadTypeOgFerietillegg
+import no.nav.dagpenger.kontrakter.oppdrag.Utbetalingsoppdrag
 import no.nav.familie.prosessering.AsyncTaskStep
 import no.nav.familie.prosessering.TaskStepBeskrivelse
 import no.nav.familie.prosessering.domene.Task
@@ -24,6 +16,8 @@ import no.nav.familie.prosessering.internal.TaskService
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.time.LocalDate
+import java.util.*
 
 @Service
 @TaskStepBeskrivelse(
@@ -67,6 +61,8 @@ class IverksettMotOppdragTask(
             vedtaksdato = iverksetting.vedtak.vedtakstidspunkt.toLocalDate(),
         )
 
+        val oppsplittetOppdrag = true
+
         val nyeAndeler = iverksetting.vedtak.tilkjentYtelse.lagAndelData()
         val forrigeAndeler = forrigeIverksettingsresultat?.tilkjentYtelseForUtbetaling.lagAndelData()
         val sisteAndelPerKjede = forrigeIverksettingsresultat?.tilkjentYtelseForUtbetaling?.sisteAndelPerKjede
@@ -80,23 +76,22 @@ class IverksettMotOppdragTask(
             sisteAndelPerKjede = sisteAndelPerKjede,
         )
 
-        if (beregnetUtbetalingsoppdrag.utbetalingsoppdrag.utbetalingsperiode.isNotEmpty()) {
-            oppdaterTilkjentYtelseOgIverksettOppdrag(
-                iverksetting.vedtak.tilkjentYtelse,
-                beregnetUtbetalingsoppdrag,
-                forrigeIverksettingsresultat,
-                behandlingId
-            )
-        } else {
-            log.warn("Iverksetter ikke noe mot oppdrag. Ikke utbetalingsoppdrag. behandlingId=$behandlingId")
-        }
+        oppdaterTilkjentYtelse(
+            tilkjentYtelse = iverksetting.vedtak.tilkjentYtelse,
+            beregnetUtbetalingsoppdrag = beregnetUtbetalingsoppdrag,
+            forrigeIverksettingsresultat = forrigeIverksettingsresultat,
+            behandlingId = behandlingId,
+            oppsplittetOppdrag = oppsplittetOppdrag
+        )
+        iverksett(beregnetUtbetalingsoppdrag.utbetalingsoppdrag, behandlingId, oppsplittetOppdrag)
     }
 
-    private fun oppdaterTilkjentYtelseOgIverksettOppdrag(
+    private fun oppdaterTilkjentYtelse(
         tilkjentYtelse: TilkjentYtelse,
         beregnetUtbetalingsoppdrag: BeregnetUtbetalingsoppdrag,
         forrigeIverksettingsresultat: Iverksettingsresultat?,
         behandlingId: UUID,
+        oppsplittetOppdrag: Boolean
     ) {
         val nyeAndelerMedPeriodeId = tilkjentYtelse.andelerTilkjentYtelse.map { andel ->
             val andelData = andel.tilAndelData()
@@ -120,14 +115,28 @@ class IverksettMotOppdragTask(
         iverksettingsresultatService.oppdaterTilkjentYtelseForUtbetaling(
             behandlingId = behandlingId,
             tilkjentYtelseForUtbetaling = nyTilkjentYtelseMedSisteAndelIKjede,
+            oppsplittetOppdrag = oppsplittetOppdrag
         )
+    }
 
-        nyTilkjentYtelseMedSisteAndelIKjede.utbetalingsoppdrag?.let { utbetalingsoppdrag ->
-            if (utbetalingsoppdrag.utbetalingsperiode.isNotEmpty()) {
-                oppdragClient.iverksettOppdrag(utbetalingsoppdrag)
-            } else {
-                log.warn("Iverksetter ikke noe mot oppdrag. Ingen utbetalingsperioder i utbetalingsoppdraget. behandlingId=$behandlingId")
-            }
+    private fun iverksett(
+        utbetalingsoppdrag: Utbetalingsoppdrag,
+        behandlingId: UUID,
+        oppsplittetOppdrag: Boolean
+    ) {
+        val utbetalingsperiode = if (oppsplittetOppdrag) {
+            // for at denne skal virke så kan ikke perioden løpe over 2 mnd
+            // er det fom/tom vi skal sjekke
+            utbetalingsoppdrag.utbetalingsperiode.filter { it.vedtakdatoTom < LocalDate.now() }
+        } else {
+            utbetalingsoppdrag.utbetalingsperiode
+        }
+        if (utbetalingsperiode.isNotEmpty()) {
+            // må sette iverksett id på de som man har iverksatt
+            oppdragClient.iverksettOppdrag(utbetalingsoppdrag.copy(utbetalingsperiode = utbetalingsperiode))
+        }
+        if (utbetalingsoppdrag.utbetalingsperiode.isEmpty()) {
+            log.warn("Iverksetter ikke noe mot oppdrag. Ingen utbetalingsperioder i utbetalingsoppdraget. behandlingId=$behandlingId")
         }
     }
 
